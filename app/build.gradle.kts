@@ -18,6 +18,10 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    
+    ndk {
+      abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
+    }
   }
 
   signingConfigs {
@@ -55,14 +59,7 @@ android {
     compose = true
     buildConfig = true
   }
-  splits {
-    abi {
-      isEnable = true
-      reset()
-      include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-      isUniversalApk = false
-    }
-  }
+  
   testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
