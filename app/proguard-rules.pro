@@ -5,6 +5,14 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
+-keep class com.yausername.youtubedl_android.** { *; }
+-keep class com.yausername.ffmpeg.** { *; }
+-keep class com.sun.jna.** { *; }
+-keepclassmembers class * extends com.sun.jna.Structure {
+    <fields>;
+    <methods>;
+}
+
 # If your project uses WebView with JS, uncomment the following
 # and specify the fully qualified class name to the JavaScript interface
 # class:

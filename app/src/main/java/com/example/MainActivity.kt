@@ -44,7 +44,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.pm.PackageManager
 import android.os.Build
-import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.yausername.youtubedl_android.YoutubeDL
@@ -183,7 +183,7 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
             .setOnlyAlertOnce(true)
             .setProgress(100, 0, false)
             
-        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
             NotificationManagerCompat.from(context).notify(notificationId, builder.build())
         }
         
@@ -212,7 +212,7 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                             
                             builder.setContentText("${progress.toInt()}%")
                                 .setProgress(100, progress.toInt(), false)
-                            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
                                 NotificationManagerCompat.from(context).notify(notificationId, builder.build())
                             }
                         }
@@ -224,7 +224,7 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                     .setOngoing(false)
                     .setProgress(0, 0, false)
                     .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
                     NotificationManagerCompat.from(context).notify(notificationId, builder.build())
                 }
                 
@@ -241,7 +241,7 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                 builder.setContentText("Download Failed")
                     .setOngoing(false)
                     .setProgress(0, 0, false)
-                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
                     NotificationManagerCompat.from(context).notify(notificationId, builder.build())
                 }
                 
@@ -494,7 +494,7 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                         Button(
                             onClick = { 
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                                         permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     }
                                 }
