@@ -7,7 +7,9 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -37,6 +39,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -94,6 +104,24 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
     
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "download_channel",
+                "Downloads",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Download progress"
+            }
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted -> }
 
     val qualities = if (selectedFormat == "Video") listOf("1080p HD", "720p HD", "480p SD", "360p SD") else listOf("320 kbps (High)", "128 kbps (Standard)")
     val formats = listOf("Video", "Audio")
@@ -145,6 +173,20 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
         downloadProgress = 0f
         downloadStatus = "Connecting to $platform..."
         
+        val notificationId = url.hashCode()
+        val builder = NotificationCompat.Builder(context, "download_channel")
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Downloading ${videoTitle}")
+            .setContentText("Connecting...")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setProgress(100, 0, false)
+            
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+        }
+        
         coroutineScope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -167,11 +209,25 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                         launch(Dispatchers.Main) {
                             downloadProgress = progress / 100f
                             downloadStatus = "Downloading $selectedFormat... ${progress.toInt()}%"
+                            
+                            builder.setContentText("${progress.toInt()}%")
+                                .setProgress(100, progress.toInt(), false)
+                            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                                NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+                            }
                         }
                     }
                 }
                 
                 downloadStatus = "Download completed successfully!"
+                builder.setContentText("Download Complete")
+                    .setOngoing(false)
+                    .setProgress(0, 0, false)
+                    .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                    NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+                }
+                
                 delay(3000)
                 
                 // Reset
@@ -181,6 +237,14 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
             } catch (e: Exception) {
                 Log.e("Downloader", "Download failed", e)
                 downloadStatus = "Download failed: ${e.message}"
+                
+                builder.setContentText("Download Failed")
+                    .setOngoing(false)
+                    .setProgress(0, 0, false)
+                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                    NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+                }
+                
                 delay(3000)
                 step = 1 // Go back to preview on failure
             }
@@ -428,7 +492,14 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                         Spacer(modifier = Modifier.height(32.dp))
                         
                         Button(
-                            onClick = { simulateDownload() },
+                            onClick = { 
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                }
+                                simulateDownload() 
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(56.dp),
@@ -443,22 +514,37 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                     
                     2 -> {
                         // Download Progress Step
-                        Spacer(modifier = Modifier.height(64.dp))
+                        Spacer(modifier = Modifier.height(32.dp))
                         
-                        Box(contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(
-                                progress = { downloadProgress },
-                                modifier = Modifier.size(120.dp),
-                                strokeWidth = 8.dp,
-                                color = MaterialTheme.colorScheme.primary,
-                                trackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                            Text(
-                                text = "${(downloadProgress * 100).toInt()}%",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().height(150.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.CloudDownload, 
+                                contentDescription = null,
+                                modifier = Modifier.size(80.dp),
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                             )
                         }
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        Text(
+                            text = "${(downloadProgress * 100).toInt()}%",
+                            style = MaterialTheme.typography.displayMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        LinearProgressIndicator(
+                            progress = { downloadProgress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(16.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
                         
                         Spacer(modifier = Modifier.height(32.dp))
                         
