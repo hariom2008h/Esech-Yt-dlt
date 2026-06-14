@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
         try {
             YoutubeDL.getInstance().init(applicationContext)
             FFmpeg.getInstance().init(applicationContext)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e("MainActivity", "Failed to initialize YoutubeDL", e)
         }
 
@@ -145,10 +145,15 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
             try {
                 var info: VideoInfo? = null
                 withContext(Dispatchers.IO) {
-                    // Update yt-dlp first? Optional, but let's just fetch info.
-                    val request = YoutubeDLRequest(url)
-                    // getInfo automatically adds -J and parses.
-                    info = YoutubeDL.getInstance().getInfo(request)
+                    try {
+                        val request = YoutubeDLRequest(url)
+                        info = YoutubeDL.getInstance().getInfo(request)
+                    } catch (e: Exception) {
+                        Log.e("Downloader", "Failed to get info, attempting update", e)
+                        YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
+                        val request = YoutubeDLRequest(url)
+                        info = YoutubeDL.getInstance().getInfo(request)
+                    }
                 }
                 
                 if (info != null) {
@@ -160,7 +165,7 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                     isError = true
                 }
             } catch (e: Exception) {
-                Log.e("Downloader", "Failed to get info", e)
+                Log.e("Downloader", "Failed to get info even after update", e)
                 isError = true
             } finally {
                 isAnalyzing = false

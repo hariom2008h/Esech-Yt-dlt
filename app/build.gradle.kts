@@ -19,10 +19,9 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     
-    ndk {
-      abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
+    androidResources {
+      localeFilters += "en"
     }
-    resConfigs("en")
   }
 
   signingConfigs {
@@ -44,8 +43,8 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      isMinifyEnabled = true
-      isShrinkResources = true
+      isMinifyEnabled = false
+      isShrinkResources = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
     }
   }
@@ -63,6 +62,15 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+  }
+  
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a", "armeabi-v7a")
+      isUniversalApk = false
+    }
   }
   
   testOptions { unitTests { isIncludeAndroidResources = true } }
