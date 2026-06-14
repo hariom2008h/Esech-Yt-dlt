@@ -1,0 +1,6 @@
+{
+  "name": "Video Downloader",
+  "description": "Download videos by pasting or sharing links from social media platforms.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
