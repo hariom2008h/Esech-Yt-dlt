@@ -4,6 +4,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -34,11 +35,24 @@ import coil.request.ImageRequest
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLException
+import com.yausername.youtubedl_android.YoutubeDLRequest
+import com.yausername.youtubedl_android.mapper.VideoInfo
+import com.yausername.ffmpeg.FFmpeg
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+        try {
+            YoutubeDL.getInstance().init(applicationContext)
+            FFmpeg.getInstance().init(applicationContext)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to initialize YoutubeDL", e)
+        }
+
         var sharedText = ""
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
@@ -99,32 +113,30 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
         isError = false
         isAnalyzing = true
         
-        val lowerUrl = url.lowercase()
-        platform = when {
-            lowerUrl.contains("youtube.com") || lowerUrl.contains("youtu.be") -> "YouTube"
-            lowerUrl.contains("instagram.com") -> "Instagram"
-            lowerUrl.contains("pinterest.com") || lowerUrl.contains("pin.it") -> "Pinterest"
-            lowerUrl.contains("facebook.com") || lowerUrl.contains("fb.watch") -> "Facebook"
-            lowerUrl.contains("tiktok.com") -> "TikTok"
-            else -> "Website"
-        }
-        
         coroutineScope.launch {
-            delay(1500) // Mock network delay
-            if (platform == "YouTube") {
-                val ytid = extractYoutubeId(url)
-                if (ytid != null) {
-                    thumbnailUrl = "https://img.youtube.com/vi/$ytid/hqdefault.jpg"
-                } else {
-                    thumbnailUrl = null
+            try {
+                var info: VideoInfo? = null
+                withContext(Dispatchers.IO) {
+                    // Update yt-dlp first? Optional, but let's just fetch info.
+                    val request = YoutubeDLRequest(url)
+                    // getInfo automatically adds -J and parses.
+                    info = YoutubeDL.getInstance().getInfo(request)
                 }
-            } else {
-                thumbnailUrl = null // Generic thumbnail
+                
+                if (info != null) {
+                    thumbnailUrl = info!!.thumbnail
+                    videoTitle = info!!.title ?: "Unknown Title"
+                    platform = info!!.extractor ?: "Unknown"
+                    step = 1
+                } else {
+                    isError = true
+                }
+            } catch (e: Exception) {
+                Log.e("Downloader", "Failed to get info", e)
+                isError = true
+            } finally {
+                isAnalyzing = false
             }
-            videoTitle = "$platform Media Content"
-            
-            isAnalyzing = false
-            step = 1
         }
     }
 
@@ -134,26 +146,44 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
         downloadStatus = "Connecting to $platform..."
         
         coroutineScope.launch {
-            delay(1000)
-            downloadStatus = "Fetching streams..."
-            delay(800)
-            
-            for (i in 1..100) {
-                downloadProgress = i / 100f
-                downloadStatus = "Downloading $selectedFormat ($selectedQuality) ... $i%"
-                delay((10..40).random().toLong())
+            try {
+                withContext(Dispatchers.IO) {
+                    val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    val request = YoutubeDLRequest(url)
+                    request.addOption("-o", downloadDir.absolutePath + "/%(title)s.%(ext)s")
+                    
+                    if (selectedFormat == "Audio") {
+                        request.addOption("-x")
+                        request.addOption("--audio-format", "mp3")
+                        request.addOption("--audio-quality", if (selectedQuality.contains("320")) "0" else "5")
+                    } else {
+                        // Video
+                        val res = selectedQuality.substringBefore("p")
+                        request.addOption("-f", "bestvideo[height<=${res}]+bestaudio/best[height<=${res}]/best")
+                    }
+                    
+                    YoutubeDL.getInstance().execute(request, "Task") { progress, etaInSeconds, _ ->
+                        // Pass update back to Main
+                        launch(Dispatchers.Main) {
+                            downloadProgress = progress / 100f
+                            downloadStatus = "Downloading $selectedFormat... ${progress.toInt()}%"
+                        }
+                    }
+                }
+                
+                downloadStatus = "Download completed successfully!"
+                delay(3000)
+                
+                // Reset
+                url = ""
+                step = 0
+                thumbnailUrl = null
+            } catch (e: Exception) {
+                Log.e("Downloader", "Download failed", e)
+                downloadStatus = "Download failed: ${e.message}"
+                delay(3000)
+                step = 1 // Go back to preview on failure
             }
-            
-            delay(500)
-            downloadStatus = "Merging and saving to Gallery..."
-            delay(1500)
-            downloadStatus = "Download completed successfully!"
-            delay(2000)
-            
-            // Reset
-            url = ""
-            step = 0
-            thumbnailUrl = null
         }
     }
 
