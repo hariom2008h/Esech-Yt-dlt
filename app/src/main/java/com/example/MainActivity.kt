@@ -56,13 +56,7 @@ import com.yausername.ffmpeg.FFmpeg
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        try {
-            YoutubeDL.getInstance().init(applicationContext)
-            FFmpeg.getInstance().init(applicationContext)
-        } catch (e: Throwable) {
-            Log.e("MainActivity", "Failed to initialize YoutubeDL", e)
-        }
-
+        
         var sharedText = ""
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
@@ -85,6 +79,21 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
+    var isInitialized by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            try {
+                YoutubeDL.getInstance().init(context.applicationContext)
+                FFmpeg.getInstance().init(context.applicationContext)
+                isInitialized = true
+            } catch (e: Throwable) {
+                Log.e("Downloader", "Failed to init", e)
+            }
+        }
+    }
+
     var url by remember { mutableStateOf(initialUrl) }
     var step by remember { mutableIntStateOf(0) } // 0: Input, 1: Preview, 2: Downloading
     var isAnalyzing by remember { mutableStateOf(false) }
@@ -108,7 +117,6 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
     var downloadStatus by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     
-    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     
     LaunchedEffect(Unit) {
@@ -170,16 +178,28 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                 withContext(Dispatchers.IO) {
                     try {
                         val request = YoutubeDLRequest(url)
+                        if (isPlaylist) {
+                            request.addOption("--flat-playlist")
+                        } else {
+                            request.addOption("--no-playlist")
+                        }
                         info = YoutubeDL.getInstance().getInfo(request)
                     } catch (e: Exception) {
                         Log.e("Downloader", "Failed to get info, attempting NIGHTLY update", e)
+                        launch(Dispatchers.Main) { errorMessage = "Updating engine... Please wait (may take a minute)" }
                         try {
                             YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.NIGHTLY)
                         } catch (updateEx: Exception) {
                             Log.e("Downloader", "NIGHTLY update failed, trying STABLE", updateEx)
                             YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
                         }
+                        launch(Dispatchers.Main) { errorMessage = "Retrying analysis..." }
                         val request = YoutubeDLRequest(url)
+                        if (isPlaylist) {
+                            request.addOption("--flat-playlist")
+                        } else {
+                            request.addOption("--no-playlist")
+                        }
                         info = YoutubeDL.getInstance().getInfo(request)
                     }
                 }
@@ -235,13 +255,14 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                     }
                     
                     if (selectedFormat == "Thumbnail") {
+                        launch(Dispatchers.Main) { downloadStatus = "Downloading Thumbnail(s)..." }
+                        
                         request.addOption("--write-thumbnail")
                         request.addOption("--skip-download")
-                        if (selectedExtension.lowercase() == "jpg") {
-                            request.addOption("--convert-thumbnails", "jpg")
-                        } else {
-                            request.addOption("--convert-thumbnails", "png")
-                        }
+                        val ext = selectedExtension.lowercase()
+                        request.addOption("--convert-thumbnails", ext)
+                        // Force FFmpeg to overwrite just in case it's hanging on prompt
+                        request.addOption("--postprocessor-args", "ffmpeg:-y")
                     } else if (selectedFormat == "Audio") {
                         val ext = selectedExtension.lowercase()
                         request.addOption("-x")
@@ -259,6 +280,19 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                         request.addOption("--merge-output-format", ext)
                     }
                     
+                    // Fake progress since thumbnail extraction doesn't trigger progress
+                    var fakeProgressJob: kotlinx.coroutines.Job? = null
+                    if (selectedFormat == "Thumbnail") {
+                        fakeProgressJob = launch(Dispatchers.Main) {
+                            var p = 0f
+                            while (p < 0.95f) {
+                                delay(500)
+                                p += 0.05f
+                                downloadProgress = p
+                            }
+                        }
+                    }
+                    
                     YoutubeDL.getInstance().execute(request, "Task") { progress, etaInSeconds, _ ->
                         // Pass update back to Main
                         launch(Dispatchers.Main) {
@@ -272,9 +306,10 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                             }
                         }
                     }
+                    fakeProgressJob?.cancel()
                 }
-                
-                downloadStatus = "Download completed successfully!"
+                    
+                    downloadStatus = "Download completed successfully!"
                 builder.setContentText("Download Complete")
                     .setOngoing(false)
                     .setProgress(0, 0, false)
@@ -400,9 +435,17 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                                 .fillMaxWidth()
                                 .height(56.dp),
                             shape = RoundedCornerShape(16.dp),
-                            enabled = !isAnalyzing
+                            enabled = !isAnalyzing && isInitialized
                         ) {
-                            if (isAnalyzing) {
+                            if (!isInitialized) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha=0.5f),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text("Initializing Engine...")
+                            } else if (isAnalyzing) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(24.dp),
                                     color = MaterialTheme.colorScheme.onPrimary,
