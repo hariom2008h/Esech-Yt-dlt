@@ -15,6 +15,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -137,7 +139,19 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
         ActivityResultContracts.RequestPermission()
     ) { isGranted -> }
 
+    // Moved LaunchedEffect
+
+    var showHistory by remember { mutableStateOf(false) }
+
+    var dynamicVideoQualities by remember { mutableStateOf(listOf("Base")) }
+    var dynamicAudioQualities by remember { mutableStateOf(listOf("Base")) }
+
+    var cachedInfo by remember { mutableStateOf<com.yausername.youtubedl_android.mapper.VideoInfo?>(null) }
+    var dlSpeed by remember { mutableStateOf("") }
+    var dlSize by remember { mutableStateOf("") }
+    
     val formats = listOf("Video", "Audio", "Thumbnail")
+
     
     val extensions = when (selectedFormat) {
         "Video" -> listOf("MP4", "WEBM", "MKV")
@@ -146,8 +160,8 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
     }
 
     val qualities = when (selectedFormat) {
-        "Video" -> listOf("4320p 8K", "2160p 4K", "1440p 2K", "1080p HD", "720p HD", "480p SD", "360p SD", "240p SD")
-        "Audio" -> listOf("320 kbps", "256 kbps", "192 kbps", "128 kbps", "64 kbps")
+        "Video" -> dynamicVideoQualities
+        "Audio" -> dynamicAudioQualities
         else -> listOf("Best")
     }
 
@@ -205,9 +219,50 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                 }
                 
                 if (info != null) {
+                    cachedInfo = info
                     thumbnailUrl = info!!.thumbnail
                     videoTitle = info!!.title ?: "Unknown Title"
                     platform = info!!.extractor ?: "Unknown"
+                    
+                    val formatsList = info!!.formats
+                    if (formatsList != null) {
+                        val vQualities = mutableSetOf<String>()
+                        val aQualities = mutableSetOf<String>()
+                        
+                        for (f in formatsList) {
+                            val vcodec = f.vcodec ?: ""
+                            val acodec = f.acodec ?: ""
+                            val height = f.height
+                            val ext = f.ext ?: ""
+                            
+                            if (vcodec != "none" && vcodec.isNotEmpty()) {
+                                if (height > 0) {
+                                    val size = f.fileSize
+                                    val finalSize = if (size > 0) size else 0L
+                                    val sizeStr = if (finalSize > 0) " (${finalSize / 1024 / 1024} MB)" else ""
+                                    vQualities.add("${height}p$sizeStr")
+                                }
+                            }
+                            if (acodec != "none" && acodec.isNotEmpty() && (vcodec == "none" || vcodec.isEmpty())) {
+                                val abr = f.abr
+                                if (abr > 0) {
+                                    val size = f.fileSize
+                                    val finalSize = if (size > 0) size else 0L
+                                    val sizeStr = if (finalSize > 0) " (${finalSize / 1024 / 1024} MB)" else ""
+                                    aQualities.add("${abr.toInt()} kbps$sizeStr")
+                                }
+                            }
+                        }
+                        
+                        dynamicVideoQualities = vQualities.toList().sortedByDescending { it.substringBefore("p").toIntOrNull() ?: 0 }.ifEmpty { listOf("1080p") }
+                        dynamicAudioQualities = aQualities.toList().sortedByDescending { it.substringBefore(" ").toIntOrNull() ?: 0 }.ifEmpty { listOf("128 kbps") }
+                    } else {
+                        dynamicVideoQualities = listOf("1080p", "720p", "480p", "360p")
+                        dynamicAudioQualities = listOf("320 kbps", "128 kbps")
+                    }
+                    
+                    selectedQuality = if (selectedFormat == "Video") dynamicVideoQualities.first() else if (selectedFormat == "Audio") dynamicAudioQualities.first() else "Best"
+                    
                     step = 1
                 } else {
                     errorMessage = "Failed to parse link: info is null."
@@ -293,13 +348,30 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                         }
                     }
                     
-                    YoutubeDL.getInstance().execute(request, "Task") { progress, etaInSeconds, _ ->
+                    var downloadedFilePath: String? = null
+                    YoutubeDL.getInstance().execute(request, "Task") { progress, etaInSeconds, line ->
                         // Pass update back to Main
                         launch(Dispatchers.Main) {
                             downloadProgress = progress / 100f
-                            downloadStatus = "Downloading $selectedFormat... ${progress.toInt()}%"
                             
-                            builder.setContentText("${progress.toInt()}%")
+                            val speedRegex = """at\s+([0-9.]+[a-zA-Z]+/s)""".toRegex()
+                            val sizeRegex = """of\s+~?([0-9.]+[a-zA-Z]+)""".toRegex()
+                            val destRegex = """Destination:\s+(.*)""".toRegex()
+                            val mergeRegex = """Merging formats into "(.*)"""".toRegex()
+                            
+                            val matchSpeed = speedRegex.find(line)
+                            val matchSize = sizeRegex.find(line)
+                            val matchDest = destRegex.find(line)
+                            val matchMerge = mergeRegex.find(line)
+                            
+                            if (matchSpeed != null) dlSpeed = matchSpeed.groupValues[1]
+                            if (matchSize != null) dlSize = matchSize.groupValues[1]
+                            if (matchDest != null) downloadedFilePath = matchDest.groupValues[1]
+                            if (matchMerge != null) downloadedFilePath = matchMerge.groupValues[1]
+                            
+                            downloadStatus = "Downloading $selectedFormat... ${progress.toInt()}%\nSpeed: $dlSpeed | Size: $dlSize"
+                            
+                            builder.setContentText("${progress.toInt()}% - $dlSpeed")
                                 .setProgress(100, progress.toInt(), false)
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
                                 NotificationManagerCompat.from(context).notify(notificationId, builder.build())
@@ -307,6 +379,37 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                         }
                     }
                     fakeProgressJob?.cancel()
+                    
+                    if (downloadedFilePath != null) {
+                        try {
+                            val db = AppDatabase.getDatabase(context)
+                            val file = java.io.File(downloadedFilePath!!)
+                            db.downloadHistoryDao().insert(
+                                DownloadHistory(
+                                    title = videoTitle,
+                                    url = url,
+                                    filePath = downloadedFilePath!!,
+                                    fileSizeBytes = if (file.exists()) file.length() else 0L,
+                                    mediaType = selectedFormat
+                                )
+                            )
+                            
+                            val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.applicationContext.packageName}.provider", file)
+                            val openIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                val mimeType = when(selectedFormat) {
+                                    "Video" -> "video/*"
+                                    "Audio" -> "audio/*"
+                                    else -> "image/*"
+                                }
+                                setDataAndType(uri, mimeType)
+                                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            val pendingIntent = android.app.PendingIntent.getActivity(context, 0, openIntent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+                            builder.setContentIntent(pendingIntent)
+                        } catch (e: Exception) {
+                            Log.e("Downloader", "Failed to add history or intent", e)
+                        }
+                    }
                 }
                     
                     downloadStatus = "Download completed successfully!"
@@ -341,6 +444,12 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
         }
     }
 
+    LaunchedEffect(url, isInitialized) {
+        if (isInitialized && url.isNotEmpty() && step == 0) {
+            analyzeLink()
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -357,10 +466,12 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                 }
             } else {
-                Spacer(modifier = Modifier.width(48.dp))
+                IconButton(onClick = { showHistory = !showHistory }) {
+                    Icon(Icons.Default.History, contentDescription = "History")
+                }
             }
             Text(
-                text = "Universal Downloader",
+                text = if (showHistory) "Download History" else "Universal Downloader",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
@@ -369,13 +480,55 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
         
         Spacer(modifier = Modifier.height(32.dp))
         
-        AnimatedContent(
-            targetState = step,
-            label = "StepAnimation"
-        ) { currentStep ->
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                when (currentStep) {
-                    0 -> {
+        if (showHistory) {
+            var historyList by remember { mutableStateOf(emptyList<DownloadHistory>()) }
+            val db = AppDatabase.getDatabase(context)
+            
+            LaunchedEffect(Unit) {
+                historyList = db.downloadHistoryDao().getAllHistory()
+            }
+            
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(historyList) { item ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clickable {
+                                val file = java.io.File(item.filePath)
+                                if (file.exists()) {
+                                    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.applicationContext.packageName}.provider", file)
+                                    val openIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                        val mimeType = when(item.mediaType) {
+                                            "Video" -> "video/*"
+                                            "Audio" -> "audio/*"
+                                            else -> "image/*"
+                                        }
+                                        setDataAndType(uri, mimeType)
+                                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(openIntent)
+                                }
+                            },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines=2)
+                            Spacer(modifier=Modifier.height(4.dp))
+                            Text("Type: ${item.mediaType} | Size: ${item.fileSizeBytes / 1024 / 1024} MB", style = MaterialTheme.typography.bodySmall)
+                            Text(item.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        } else {
+            AnimatedContent(
+                targetState = if (step == 1) 0 else step,
+                label = "StepAnimation"
+            ) { currentStep ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    when (currentStep) {
+                        0 -> {
                         // Input Step
                         Icon(
                             imageVector = Icons.Default.CloudDownload,
@@ -461,211 +614,6 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                         }
                     }
                     
-                    1 -> {
-                        // Preview & Select Step
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                        ) {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                if (thumbnailUrl != null) {
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(LocalContext.current)
-                                            .data(thumbnailUrl)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "Thumbnail",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Default.VideoFile,
-                                        contentDescription = null,
-                                        modifier = Modifier
-                                            .size(64.dp)
-                                            .align(Alignment.Center),
-                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                                    )
-                                }
-                                
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.Black.copy(alpha = 0.6f))
-                                        .align(Alignment.Center)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Play preview",
-                                        tint = Color.White,
-                                        modifier = Modifier.align(Alignment.Center)
-                                    )
-                                }
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = videoTitle,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        
-                        if (url.contains("list=")) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isPlaylist,
-                                    onCheckedChange = { isPlaylist = it }
-                                )
-                                Text("Download complete playlist")
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Format Dropdown
-                            ExposedDropdownMenuBox(
-                                expanded = expandedFormat,
-                                onExpandedChange = { expandedFormat = !expandedFormat },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                OutlinedTextField(
-                                    value = selectedFormat,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("Format", maxLines=1) },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedFormat) },
-                                    modifier = Modifier.menuAnchor(),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = expandedFormat,
-                                    onDismissRequest = { expandedFormat = false }
-                                ) {
-                                    formats.forEach { selectionOption ->
-                                        DropdownMenuItem(
-                                            text = { Text(selectionOption) },
-                                            onClick = {
-                                                selectedFormat = selectionOption
-                                                
-                                                val newExtensions = when (selectionOption) {
-                                                    "Video" -> listOf("MP4", "WEBM", "MKV")
-                                                    "Audio" -> listOf("MP3", "M4A", "WAV", "FLAC")
-                                                    else -> listOf("JPG", "PNG")
-                                                }
-                                                val newQualities = when (selectionOption) {
-                                                    "Video" -> listOf("4320p 8K", "2160p 4K", "1440p 2K", "1080p HD", "720p HD", "480p SD", "360p SD", "240p SD")
-                                                    "Audio" -> listOf("320 kbps", "256 kbps", "192 kbps", "128 kbps", "64 kbps")
-                                                    else -> listOf("Best")
-                                                }
-                                                
-                                                if (!newExtensions.contains(selectedExtension)) selectedExtension = newExtensions.first()
-                                                if (!newQualities.contains(selectedQuality)) selectedQuality = newQualities.first()
-                                                
-                                                expandedFormat = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Extension Dropdown (MP4, MP3, etc)
-                            ExposedDropdownMenuBox(
-                                expanded = expandedExtension,
-                                onExpandedChange = { expandedExtension = !expandedExtension },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                OutlinedTextField(
-                                    value = selectedExtension,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("Ext", maxLines=1) },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedExtension) },
-                                    modifier = Modifier.menuAnchor(),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = expandedExtension,
-                                    onDismissRequest = { expandedExtension = false }
-                                ) {
-                                    extensions.forEach { selectionOption ->
-                                        DropdownMenuItem(
-                                            text = { Text(selectionOption) },
-                                            onClick = {
-                                                selectedExtension = selectionOption
-                                                expandedExtension = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                            
-                            // Quality Dropdown
-                            ExposedDropdownMenuBox(
-                                expanded = expandedQuality,
-                                onExpandedChange = { expandedQuality = !expandedQuality },
-                                modifier = Modifier.weight(1.3f)
-                            ) {
-                                OutlinedTextField(
-                                    value = selectedQuality,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("Quality", maxLines=1) },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedQuality) },
-                                    modifier = Modifier.menuAnchor(),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = expandedQuality,
-                                    onDismissRequest = { expandedQuality = false }
-                                ) {
-                                    qualities.forEach { selectionOption ->
-                                        DropdownMenuItem(
-                                            text = { Text(selectionOption) },
-                                            onClick = {
-                                                selectedQuality = selectionOption
-                                                expandedQuality = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(32.dp))
-                        
-                        Button(
-                            onClick = { 
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    }
-                                }
-                                simulateDownload() 
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(56.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Download", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    
                     2 -> {
                         // Download Progress Step
                         Spacer(modifier = Modifier.height(32.dp))
@@ -709,6 +657,228 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                             textAlign = TextAlign.Center
                         )
                     }
+                }
+            }
+        }
+    }
+    }
+    
+    if (step == 1) {
+        ModalBottomSheet(
+            onDismissRequest = { step = 0 },
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+                    .padding(bottom = 32.dp)
+            ) {
+                // Preview & Select Step
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        if (thumbnailUrl != null) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(thumbnailUrl)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = "Thumbnail",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.VideoFile,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .align(Alignment.Center),
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                            )
+                        }
+                        
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .align(Alignment.Center)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = "Play preview",
+                                tint = Color.White,
+                                modifier = Modifier.align(Alignment.Center)
+                            )
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = videoTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                
+                if (url.contains("list=")) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = isPlaylist,
+                            onCheckedChange = { isPlaylist = it }
+                        )
+                        Text("Download complete playlist")
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Format Dropdown
+                    ExposedDropdownMenuBox(
+                        expanded = expandedFormat,
+                        onExpandedChange = { expandedFormat = !expandedFormat },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        OutlinedTextField(
+                            value = selectedFormat,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Format", maxLines=1) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedFormat) },
+                            modifier = Modifier.menuAnchor(),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expandedFormat,
+                            onDismissRequest = { expandedFormat = false }
+                        ) {
+                            formats.forEach { selectionOption ->
+                                DropdownMenuItem(
+                                    text = { Text(selectionOption) },
+                                    onClick = {
+                                        selectedFormat = selectionOption
+                                        
+                                        val newExtensions = when (selectionOption) {
+                                            "Video" -> listOf("MP4", "WEBM", "MKV")
+                                            "Audio" -> listOf("MP3", "M4A", "WAV", "FLAC")
+                                            else -> listOf("JPG", "PNG")
+                                        }
+                                        val newQualities = when (selectionOption) {
+                                            "Video" -> dynamicVideoQualities
+                                            "Audio" -> dynamicAudioQualities
+                                            else -> listOf("Best")
+                                        }
+                                        
+                                        if (!newExtensions.contains(selectedExtension)) selectedExtension = newExtensions.first()
+                                        if (!newQualities.contains(selectedQuality)) selectedQuality = newQualities.first()
+                                        
+                                        expandedFormat = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // Extension Dropdown (MP4, MP3, etc)
+                    ExposedDropdownMenuBox(
+                        expanded = expandedExtension,
+                        onExpandedChange = { expandedExtension = !expandedExtension },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        OutlinedTextField(
+                            value = selectedExtension,
+                            onValueChange = {},
+                            readOnly = true,
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            label = { Text("Ext", maxLines=1) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedExtension) },
+                            modifier = Modifier.menuAnchor(),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expandedExtension,
+                            onDismissRequest = { expandedExtension = false }
+                        ) {
+                            extensions.forEach { selectionOption ->
+                                DropdownMenuItem(
+                                    text = { Text(selectionOption) },
+                                    onClick = {
+                                        selectedExtension = selectionOption
+                                        expandedExtension = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    
+                    // Quality Dropdown
+                    ExposedDropdownMenuBox(
+                        expanded = expandedQuality,
+                        onExpandedChange = { expandedQuality = !expandedQuality },
+                        modifier = Modifier.weight(1.4f)
+                    ) {
+                        OutlinedTextField(
+                            value = selectedQuality,
+                            onValueChange = {},
+                            readOnly = true,
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            label = { Text("Quality", maxLines=1) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedQuality) },
+                            modifier = Modifier.menuAnchor(),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expandedQuality,
+                            onDismissRequest = { expandedQuality = false }
+                        ) {
+                            qualities.forEach { selectionOption ->
+                                DropdownMenuItem(
+                                    text = { Text(selectionOption) },
+                                    onClick = {
+                                        selectedQuality = selectionOption
+                                        expandedQuality = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(32.dp))
+                
+                Button(
+                    onClick = { 
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        }
+                        simulateDownload() 
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Download", fontWeight = FontWeight.Bold)
                 }
             }
         }
