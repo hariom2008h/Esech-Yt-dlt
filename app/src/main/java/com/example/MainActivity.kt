@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
     var isInitialized by remember { mutableStateOf(false) }
+    var initStatus by remember { mutableStateOf("Initializing Engine...") }
     val context = LocalContext.current
     
     LaunchedEffect(Unit) {
@@ -89,6 +90,18 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
             try {
                 YoutubeDL.getInstance().init(context.applicationContext)
                 FFmpeg.getInstance().init(context.applicationContext)
+                
+                val sharedPrefs = context.applicationContext.getSharedPreferences("Settings", Context.MODE_PRIVATE)
+                val autoUpdate = sharedPrefs.getBoolean("autoUpdate", true)
+                if (autoUpdate) {
+                    withContext(Dispatchers.Main) { initStatus = "Checking for engine updates..." }
+                    try {
+                        YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext, YoutubeDL.UpdateChannel.STABLE)
+                    } catch (e: Exception) {
+                        Log.e("Downloader", "Failed to auto-update YoutubeDL", e)
+                    }
+                }
+                
                 isInitialized = true
             } catch (e: Throwable) {
                 Log.e("Downloader", "Failed to init", e)
@@ -475,7 +488,37 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.width(48.dp))
+            var showSettings by remember { mutableStateOf(false) }
+            IconButton(onClick = { showSettings = true }) {
+                Icon(Icons.Default.Settings, contentDescription = "Settings")
+            }
+            
+            if (showSettings) {
+                val sharedPrefs = context.getSharedPreferences("Settings", Context.MODE_PRIVATE)
+                var autoUpdateEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("autoUpdate", true)) }
+                
+                AlertDialog(
+                    onDismissRequest = { showSettings = false },
+                    title = { Text("Settings") },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Auto-update engine on start", modifier = Modifier.weight(1f))
+                            Switch(
+                                checked = autoUpdateEnabled,
+                                onCheckedChange = { 
+                                    autoUpdateEnabled = it
+                                    sharedPrefs.edit().putBoolean("autoUpdate", it).apply()
+                                }
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showSettings = false }) {
+                            Text("OK")
+                        }
+                    }
+                )
+            }
         }
         
         Spacer(modifier = Modifier.height(32.dp))
@@ -597,7 +640,7 @@ fun DownloaderScreen(initialUrl: String, modifier: Modifier = Modifier) {
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text("Initializing Engine...")
+                                Text(initStatus)
                             } else if (isAnalyzing) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(24.dp),
